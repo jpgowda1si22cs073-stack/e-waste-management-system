@@ -1,6 +1,10 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { auth, db } from "../FirebaseConfig";
-import { createUserWithEmailAndPassword } from "firebase/auth";
+import {
+  createUserWithEmailAndPassword,
+  deleteUser,
+  fetchSignInMethodsForEmail,
+} from "firebase/auth";
 import { doc, setDoc } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import {
@@ -42,6 +46,24 @@ const ErrorMessage = ({ type, message }) => {
           message:
             "Your password must be at least 8 characters long and include uppercase, lowercase, numbers, and special characters.",
           action: "Create a stronger password",
+        };
+
+      case "auth/operation-not-allowed":
+        return {
+          title: "Email/Password Sign-Up Disabled",
+          message:
+            "This Firebase project is not allowing email/password registration right now.",
+          action: "Enable Email/Password provider in Firebase Authentication settings",
+        };
+
+      case "permission-denied":
+      case "firestore/permission-denied":
+        return {
+          title: "Database Permission Error",
+          message:
+            "Profile data could not be saved due to Firestore rules. Registration was rolled back.",
+          action:
+            "Update Firestore rules to allow users to write their own profile document, then try again",
         };
 
       case "location/access-denied":
@@ -139,6 +161,23 @@ const Register = () => {
   const [loading, setLoading] = useState(false);
   const [passwordStrength, setPasswordStrength] = useState(0);
   const [formErrors, setFormErrors] = useState({});
+  const [submitDebug, setSubmitDebug] = useState(null);
+  const isSubmittingRef = useRef(false);
+
+  const normalizeFirebaseErrorCode = (error) => {
+    if (error?.code) return error.code;
+
+    const msg = error?.message || "";
+    if (msg.includes("auth/email-already-in-use") || msg.includes("EMAIL_EXISTS")) {
+      return "auth/email-already-in-use";
+    }
+    if (msg.includes("auth/invalid-email")) return "auth/invalid-email";
+    if (msg.includes("auth/weak-password")) return "auth/weak-password";
+    if (msg.includes("auth/operation-not-allowed")) {
+      return "auth/operation-not-allowed";
+    }
+    return "unknown";
+  };
 
   const validatePassword = (password) => {
     let strength = 0;
@@ -206,12 +245,13 @@ const Register = () => {
 
   const validateForm = () => {
     const errors = {};
+    const normalizedEmail = formData.email.trim().toLowerCase();
 
     if (!formData.name.trim()) {
       errors.name = { type: "validation/name" };
     }
 
-    if (!formData.email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+    if (!normalizedEmail.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
       errors.email = { type: "auth/invalid-email" };
     }
 
@@ -238,39 +278,89 @@ const Register = () => {
   const handleRegister = async (e) => {
     e.preventDefault();
 
+    if (isSubmittingRef.current || loading) return;
+
+    // Clear stale submit-level errors from previous attempts.
+    setFormErrors((prev) => {
+      const next = { ...prev };
+      delete next.submit;
+      return next;
+    });
+
     if (!validateForm()) {
       return;
     }
 
+    setSubmitDebug(null);
+    isSubmittingRef.current = true;
     setLoading(true);
 
     try {
+      const normalizedEmail = formData.email.trim().toLowerCase();
+
       const userCredential = await createUserWithEmailAndPassword(
         auth,
-        formData.email,
+        normalizedEmail,
         formData.password
       );
       const user = userCredential.user;
 
-      await setDoc(doc(db, "users", user.uid), {
-        name: formData.name,
-        email: formData.email,
-        contactNumber: formData.contactNumber,
-        role,
-        latitude: role === "lender" ? formData.latitude : null,
-        longitude: role === "lender" ? formData.longitude : null,
-        createdAt: new Date().toISOString(),
-      });
+      try {
+        await setDoc(doc(db, "users", user.uid), {
+          name: formData.name,
+          email: normalizedEmail,
+          contactNumber: formData.contactNumber,
+          role,
+          latitude: role === "lender" ? formData.latitude : null,
+          longitude: role === "lender" ? formData.longitude : null,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (dbError) {
+        // Roll back the newly created auth account if profile write fails.
+        try {
+          await deleteUser(user);
+        } catch (deleteError) {
+          console.error("Failed to rollback auth user:", deleteError);
+        }
+
+        throw {
+          code: dbError?.code || "firestore/permission-denied",
+          message: dbError?.message || "Failed to save user profile",
+        };
+      }
 
       setLoading(false);
       navigate("/login");
     } catch (error) {
       console.error("Error during registration:", error);
+      let normalizedCode = normalizeFirebaseErrorCode(error);
+      const normalizedEmail = formData.email.trim().toLowerCase();
+
+      // Double-check duplicate-email responses to avoid misleading UI messages.
+      if (normalizedCode === "auth/email-already-in-use") {
+        try {
+          const methods = await fetchSignInMethodsForEmail(auth, normalizedEmail);
+          if (!methods || methods.length === 0) {
+            normalizedCode = "unknown";
+          }
+        } catch (verifyError) {
+          console.error("Error verifying existing email:", verifyError);
+        }
+      }
+
       setFormErrors((prev) => ({
         ...prev,
-        submit: { type: error.code || "unknown", message: error.message },
+        submit: { type: normalizedCode, message: error?.message },
       }));
+      setSubmitDebug({
+        rawCode: error?.code || "(none)",
+        normalizedCode,
+        message: error?.message || "(none)",
+        emailTried: normalizedEmail,
+      });
       setLoading(false);
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
@@ -458,6 +548,24 @@ const Register = () => {
           )}
 
           {formErrors.submit && <ErrorMessage {...formErrors.submit} />}
+
+          {process.env.NODE_ENV !== "production" && submitDebug && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
+              <p className="font-semibold mb-1">Debug (temporary)</p>
+              <p>
+                <span className="font-medium">Raw Code:</span> {submitDebug.rawCode}
+              </p>
+              <p>
+                <span className="font-medium">Mapped Code:</span> {submitDebug.normalizedCode}
+              </p>
+              <p>
+                <span className="font-medium">Email Tried:</span> {submitDebug.emailTried}
+              </p>
+              <p className="break-words">
+                <span className="font-medium">Message:</span> {submitDebug.message}
+              </p>
+            </div>
+          )}
 
           <button
             type="submit"

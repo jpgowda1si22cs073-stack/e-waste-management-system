@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 # Define folder names
 folders = ['Keyboards', 'Mobile', 'Mouses', 'TV', 'camera', 'laptop', 'microwave', 'smartwatch']
-data_dir = "archive (5)\dataset"  # Update with your dataset path
+data_dir = os.path.join("archive (5)", "dataset")
 
 # Prepare the dataset
 images = []
@@ -101,4 +101,9 @@ plt.title('Training and Validation Loss')
 plt.show()
 
 # Instead of model.save('my_model.h5')
+# Save in both formats for compatibility with different runtimes.
+model.save('my_model.keras')
 model.save('my_model.h5')
+
+# Persist label classes used by the inference server.
+np.save('label_encoder_classes.npy', label_encoder.classes_)

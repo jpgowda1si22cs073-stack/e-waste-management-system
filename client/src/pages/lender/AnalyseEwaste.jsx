@@ -101,7 +101,14 @@ const AnalyseEwaste = () => {
       });
 
       if (!response.ok) {
-        throw new Error('Analysis failed');
+        let serverError = 'Analysis failed';
+        try {
+          const errorData = await response.json();
+          serverError = errorData.error || serverError;
+        } catch (_) {
+          // Ignore JSON parse failures and fall back to generic message.
+        }
+        throw new Error(serverError);
       }
 
       const data = await response.json();
