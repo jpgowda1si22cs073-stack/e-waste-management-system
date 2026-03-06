@@ -1,10 +1,17 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import tensorflow as tf
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
 import os
+import sys
 from werkzeug.utils import secure_filename
+
+try:
+    import tensorflow as tf
+    TENSORFLOW_IMPORT_ERROR = None
+except Exception as e:
+    tf = None
+    TENSORFLOW_IMPORT_ERROR = str(e)
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -72,15 +79,50 @@ e_waste_data = {
     }
 }
 
-# Load model and label encoder
-model = tf.keras.models.load_model('my_model.h5')
-label_encoder = LabelEncoder()
-label_encoder.classes_ = np.load('label_encoder_classes.npy', allow_pickle=True)
+# Load model and label encoder lazily with fault tolerance so the API can still start.
+model = None
+label_encoder = None
+MODEL_LOAD_ERROR = None
+
+
+def initialize_model():
+    global model, label_encoder, MODEL_LOAD_ERROR
+
+    if tf is None:
+        MODEL_LOAD_ERROR = f"TensorFlow import failed: {TENSORFLOW_IMPORT_ERROR}"
+        return
+
+    tf_version = getattr(tf, "__version__", "unknown") if tf is not None else "unavailable"
+    runtime = f"python={sys.executable}, tf={tf_version}"
+    last_error = None
+
+    # Prefer H5 first because it has been validated in this project runtime.
+    for model_path in ('my_model.h5', 'my_model.keras'):
+        if not os.path.exists(model_path):
+            continue
+
+        try:
+            model = tf.keras.models.load_model(model_path, compile=False)
+            label_encoder = LabelEncoder()
+            label_encoder.classes_ = np.load('label_encoder_classes.npy', allow_pickle=True)
+            MODEL_LOAD_ERROR = None
+            print(f"[startup] Loaded model from {model_path} ({runtime})")
+            return
+        except Exception as e:
+            last_error = f"{model_path}: {e} ({runtime})"
+
+    MODEL_LOAD_ERROR = last_error or f"No model file found (expected my_model.h5 or my_model.keras) ({runtime})"
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def classify_image(img_path):
+    if model is None or label_encoder is None:
+        return {
+            'success': False,
+            'error': f"Model unavailable: {MODEL_LOAD_ERROR or 'unknown model initialization error'}"
+        }
+
     try:
         img = tf.keras.preprocessing.image.load_img(img_path, target_size=(128, 128))
         img_array = tf.keras.preprocessing.image.img_to_array(img)
@@ -106,6 +148,9 @@ def classify_image(img_path):
 
 @app.route('/classify', methods=['POST'])
 def classify_uploaded_image():
+    if model is None or label_encoder is None:
+        return jsonify({'error': f"Model unavailable: {MODEL_LOAD_ERROR}"}), 503
+
     # Check if image was uploaded
     if 'image' not in request.files:
         return jsonify({'error': 'No image uploaded'}), 400
@@ -141,4 +186,7 @@ def classify_uploaded_image():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    initialize_model()
+    if MODEL_LOAD_ERROR:
+        print(f"[startup] Model initialization failed: {MODEL_LOAD_ERROR}")
     app.run(debug=True, port=5000)

@@ -18,8 +18,13 @@ const ScheduleEwaste = () => {
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
+      if (file.size > 10 * 1024 * 1024) {
+        setError("Image must be smaller than 10MB.");
+        return;
+      }
       setImageFile(file);
       setImagePreview(URL.createObjectURL(file));
+      setError("");
     }
   };
 
@@ -29,17 +34,26 @@ const ScheduleEwaste = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
+
     setIsSubmitting(true);
     setError("");
     setSuccessMessage("");
 
     try {
+      const localUser = JSON.parse(localStorage.getItem("user") || "null");
+      const lenderId = auth.currentUser?.uid || localUser?.uid;
+
+      if (!lenderId) {
+        throw new Error("Your session expired. Please log in again.");
+      }
+
       let imageUrl = "";
       if (imageFile) {
         const storage = getStorage();
         const imageRef = ref(
           storage,
-          `ewaste-images/${auth.currentUser.uid}/${Date.now()}-${
+          `ewaste-images/${lenderId}/${Date.now()}-${
             imageFile.name
           }`
         );
@@ -53,7 +67,7 @@ const ScheduleEwaste = () => {
         pickupTime,
         status: "pending",
         createdAt: new Date().toISOString(),
-        lenderId: auth.currentUser?.uid,
+        lenderId,
       });
 
       setSuccessMessage("E-waste pickup scheduled successfully!");
@@ -64,8 +78,20 @@ const ScheduleEwaste = () => {
 
       setTimeout(() => setSuccessMessage(""), 3000);
     } catch (err) {
-      setError("Error scheduling pickup. Please try again.");
-      console.error("Error:", err);
+      console.error("Error scheduling pickup:", err);
+      const code = err?.code || "";
+
+      if (code === "permission-denied" || code === "firestore/permission-denied") {
+        setError("Firestore permissions denied for ewasteSchedules. Update Firestore Rules.");
+      } else if (code === "storage/unauthorized" || code === "storage/unauthenticated") {
+        setError("Storage is not available on this Firebase setup. Submit without image or upgrade plan.");
+      } else if (code === "storage/canceled") {
+        setError("Image upload was canceled. Please try again.");
+      } else if (code === "storage/retry-limit-exceeded") {
+        setError("Upload timed out. Check internet and try a smaller image.");
+      } else {
+        setError(err?.message || "Error scheduling pickup. Please try again.");
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -108,7 +134,7 @@ const ScheduleEwaste = () => {
             {/* Image Upload Section */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Upload Image
+                Upload Image (Optional)
               </label>
               <div
                 className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-lg hover:border-green-500 transition-colors cursor-pointer"
@@ -132,7 +158,6 @@ const ScheduleEwaste = () => {
                 accept="image/*"
                 id="fileInput"
                 onChange={handleImageChange}
-                required
                 className="sr-only"
               />
               {imagePreview && (

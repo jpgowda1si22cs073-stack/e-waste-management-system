@@ -1,0 +1,12 @@
+# Python virtual environments
+server/.venv310/
+server/env/
+
+# Python cache
+server/__pycache__/
+**/__pycache__/
+*.pyc
+
+# OS/editor
+.DS_Store
+Thumbs.db

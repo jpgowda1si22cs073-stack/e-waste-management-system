@@ -3,12 +3,12 @@ import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBELYb-c80DbKjPN-a5-FQhoBoFje1Pyl4",
-  authDomain: "e-waste-management-bc6f0.firebaseapp.com",
-  projectId: "e-waste-management-bc6f0",
-  storageBucket: "e-waste-management-bc6f0.firebasestorage.app",
-  messagingSenderId: "490912428105",
-  appId: "1:490912428105:web:f7b819a257f2d27eb70f98",
+  apiKey: "AIzaSyCkj-4i8XzxJGcfWyXw1Fk71zvQERFou5s",
+  authDomain: "e-waste-cloned.firebaseapp.com",
+  projectId: "e-waste-cloned",
+  storageBucket: "e-waste-cloned.firebasestorage.app",
+  messagingSenderId: "342410012827",
+  appId: "1:342410012827:web:f60850ea21748cc6f6be3e",
 };
 
 const app = initializeApp(firebaseConfig);
